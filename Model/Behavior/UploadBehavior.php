@@ -19,34 +19,36 @@
  */
 App::uses('Folder', 'Utility');
 App::uses('UploadException', 'Upload.Lib/Error/Exception');
+App::uses('HttpSocket', 'Network/Http');
 class UploadBehavior extends ModelBehavior {
 
 	public $defaults = array(
-		'rootDir'			=> null,
-		'pathMethod'		=> 'primaryKey',
-		'path'				=> '{ROOT}webroot{DS}files{DS}{model}{DS}{field}{DS}',
-		'fields'			=> array('dir' => 'dir', 'type' => 'type', 'size' => 'size'),
-		'mimetypes'			=> array(),
-		'extensions'		=> array(),
-		'maxSize'			=> 2097152,
-		'minSize'			=> 8,
-		'maxHeight'			=> 0,
-		'minHeight'			=> 0,
-		'maxWidth'			=> 0,
-		'minWidth'			=> 0,
-		'thumbnails'		=> true,
-		'thumbnailMethod'	=> 'imagick',
-		'thumbnailName'		=> null,
-		'thumbnailPath'		=> null,
-		'thumbnailPrefixStyle'=> true,
-		'thumbnailQuality'	=> 75,
-		'thumbnailSizes'	=> array(),
-		'thumbnailType'		=> false,
-		'deleteOnUpdate'	=> false,
-		'mediaThumbnailType'=> 'png',
-		'saveDir'			=> true,
+		'rootDir' => null,
+		'pathMethod' => 'primaryKey',
+		'path' => '{ROOT}webroot{DS}files{DS}{model}{DS}{field}{DS}',
+		'fields' => array('dir' => 'dir', 'type' => 'type', 'size' => 'size'),
+		'mimetypes' => array(),
+		'extensions' => array(),
+		'maxSize' => 2097152,
+		'minSize' => 8,
+		'maxHeight' => 0,
+		'minHeight' => 0,
+		'maxWidth' => 0,
+		'minWidth' => 0,
+		'thumbnails' => true,
+		'thumbnailMethod' => 'imagick',
+		'thumbnailName' => null,
+		'thumbnailPath' => null,
+		'thumbnailPrefixStyle' => true,
+		'thumbnailQuality' => 75,
+		'thumbnailSizes' => array(),
+		'thumbnailType' => false,
+		'deleteOnUpdate' => false,
+		'mediaThumbnailType' => 'png',
+		'saveDir' => true,
 		'deleteFolderOnDelete' => false,
-);
+		'mode' => 0777,
+	);
 
 	protected $_imageMimetypes = array(
 		'image/bmp',
@@ -263,8 +265,26 @@ class UploadBehavior extends ModelBehavior {
 		return true;
 	}
 
+	/**
+	 * Transform Model.field value like as PHP upload array (name, tmp_name)
+	 * for UploadBehavior plugin processing.
+	 */
+	function beforeValidate(Model $model) {
+		foreach ($this->settings[$model->alias] as $field => $options) {
+			if ($this->_isURI($model->data[$model->alias][$field])) {
+				$uri = $model->data[$model->alias][$field];
+				if (!$this->_grab($model, $field, $uri)) {
+					$model->invalidate($field, __d('upload', 'File was not downloaded.', true));
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+
 	public function afterSave(Model $model, $created) {
 		$temp = array($model->alias => array());
+
 		foreach ($this->settings[$model->alias] as $field => $options) {
 			if (!in_array($field, array_keys($model->data[$model->alias]))) continue;
 			if (empty($this->runtime[$model->alias][$field])) continue;
@@ -312,14 +332,18 @@ class UploadBehavior extends ModelBehavior {
 	}
 
 	public function handleUploadedFile($modelAlias, $field, $tmp, $filePath) {
-		return is_uploaded_file($tmp) && @move_uploaded_file($tmp, $filePath);
+		if (is_uploaded_file($tmp)) {
+			return move_uploaded_file($tmp, $filePath);
+		} else {
+			return rename($tmp, $filePath);
+		}
 	}
 
 	public function unlink($file) {
 		return @unlink($file);
 	}
 
-	public function deleteFolder($model, $path) {
+	public function deleteFolder(Model $model, $path) {
 		if (!isset($this->__foldersToRemove[$model->alias])) {
 			return false;
 		}
@@ -882,8 +906,8 @@ class UploadBehavior extends ModelBehavior {
 			list($destW, $destH) = explode('x', substr($geometry, 1, strlen($geometry)-2));
 			$image->thumbnailImage($destW, $destH, true);
 			$imageGeometry = $image->getImageGeometry();
-			$x = ($destW - $imageGeometry['width']) / 2;
-			$y = ($destH - $imageGeometry['height']) / 2;
+			$x = ($imageGeometry['width'] - $destW) / 2;
+			$y = ($imageGeometry['height'] - $destH) / 2;
 			$image->setGravity(Imagick::GRAVITY_CENTER);
 			$image->extentImage($destW, $destH, $x, $y);
 		} elseif (preg_match('/^[\\d]+x[\\d]+$/', $geometry)) {
@@ -1111,13 +1135,13 @@ class UploadBehavior extends ModelBehavior {
 
 	public function _getPathFlat(Model $model, $field, $path) {
 		$destDir = $path;
-		$this->_mkPath($destDir);
+		$this->_mkPath($model, $field, $destDir);
 		return '';
 	}
 
 	public function _getPathPrimaryKey(Model $model, $field, $path) {
 		$destDir = $path . $model->id . DIRECTORY_SEPARATOR;
-		$this->_mkPath($destDir);
+		$this->_mkPath($model, $field, $destDir);
 		return $model->id;
 	}
 
@@ -1132,7 +1156,7 @@ class UploadBehavior extends ModelBehavior {
 		}
 
 		$destDir = $path . $endPath;
-		$this->_mkPath($destDir);
+		$this->_mkPath($model, $field, $destDir);
 
 		return substr($endPath, 0, -1);
 	}
@@ -1148,15 +1172,50 @@ class UploadBehavior extends ModelBehavior {
 		}
 
 		$destDir = $path . $endPath;
-		$this->_mkPath($destDir);
+		$this->_mkPath($model, $field, $destDir);
 
 		return substr($endPath, 0, -1);
 	}
 
-	public function _mkPath($destDir) {
+	/**
+	 * Download remote file into PHP's TMP dir
+	 */
+	public function _grab(Model $model, $field, $uri) {
+		$socket = new HttpSocket();
+		$file = $socket->get($uri, array(), array('redirect' => true));
+		$headers = $socket->response['header'];
+		$file_name = basename($socket->request['uri']['path']);
+		$tmp_file = sys_get_temp_dir() . '/' . $file_name;
+
+		if ($socket->response['status']['code'] != 200) {
+			return false;
+		}
+
+		if (isset($model->data[$model->alias]['file_name_override'])) {
+			$file_name = $model->data[$model->alias]['file_name_override'] . '.' . pathinfo($socket->request['uri']['path'], PATHINFO_EXTENSION);
+		}
+
+		$model->data[$model->alias][$field] = array(
+			'name' => $file_name,
+			'type' => $headers['Content-Type'],
+			'tmp_name' => $tmp_file,
+			'error' => 1,
+			'size' => (isset($headers['content-length']) ? $headers['Content-Length'] : 0),
+		);
+
+		$file = file_put_contents($tmp_file, $socket->response['body']);
+		if (!$file) {
+			return false;
+		}
+
+		$model->data[$model->alias][$field]['error'] = 0;
+		return true;
+	}
+
+	public function _mkPath(Model $model, $field, $destDir) {
 		if (!file_exists($destDir)) {
-			@mkdir($destDir, 0777, true);
-			@chmod($destDir, 0777);
+			@mkdir($destDir, $this->settings[$model->alias][$field]['mode'], true);
+			@chmod($destDir, $this->settings[$model->alias][$field]['mode']);
 		}
 		return true;
 	}
@@ -1249,7 +1308,7 @@ class UploadBehavior extends ModelBehavior {
 				$thumbnailPathSized = $this->_pathThumbnail($model, $field, compact(
 					'geometry', 'size', 'thumbnailPath'
 				));
-				$this->_mkPath($thumbnailPathSized);
+				$this->_mkPath($model, $field, $thumbnailPathSized);
 
 				$valid = false;
 				if (method_exists($model, $method)) {
@@ -1272,6 +1331,10 @@ class UploadBehavior extends ModelBehavior {
 
 	public function _isImage(Model $model, $mimetype) {
 		return in_array($mimetype, $this->_imageMimetypes);
+	}
+
+	public function _isURI($url_str) {
+		return (filter_var($url_str, FILTER_VALIDATE_URL) ? true : false);
 	}
 
 	public function _isMedia(Model $model, $mimetype) {
