@@ -43,8 +43,8 @@ class ThumbnailHelper extends AppHelper {
  */
     function src($field, $thumbnailSizeName, $data) {
         list($modelName, $modelField) = explode('.', $field);
-        $thumbName = Set::extract($field, $data);
-        $src = $this->_getSource($field, $thumbnailSizeName, $data);
+        $thumbName  = Set::extract($field, $data);
+        $src        = $this->_getSource($field, $thumbnailSizeName, $data);
         if (is_null($src) || is_null($thumbName)) {
             $errmsg = __d('upload', "{$modelName} primary key, {$modelField} or {$modelName}.{$modelField}_dir not exists in $data.");
             $this->__error($errmsg);
@@ -104,16 +104,16 @@ class ThumbnailHelper extends AppHelper {
             return null;
         }
 
-        $Upload = $Model->Behaviors->Upload;
+        $Upload         = $Model->Behaviors->Upload;
         $uploadSettings = $Upload->settings[$model][$field];
-        $uploadDir = $uploadSettings['path'];
+        $uploadDir      = $uploadSettings['path'];
         $uploadDirPathMethodField = $uploadSettings['fields']['dir'];
 
-        if (Set::check($data, "{$model}.{$uploadDirPathMethodField}")) {
+        if (Set::check($data, sprintf('%s.%s', $model, $uploadDirPathMethodField))) {
             // Upload pathMethod is in $data
-            $tmp = Set::extract("/{$model}/{$uploadDirPathMethodField}", $data );
+            $tmp = Set::extract(sprintf('/%s/%s', $model, $uploadDirPathMethodField), $data);
             $uploadDirMethod = $tmp[0];
-        } elseif (Set::check($data, "{$model}.{$Model->primaryKey}") && $uploadSettings['pathMethod'] == '_getPathPrimaryKey') {
+        } elseif (Set::check($data, sprintf('%s.%s', $model, $Model->primaryKey)) && $uploadSettings['pathMethod'] == '_getPathPrimaryKey') {
             // Triying to get Upload's methodPath from Model id (if is set) and the methodPath is set
             // to "primaryKey".
             $uploadDirMethod = $data[$model][$Model->primaryKey];
@@ -127,7 +127,7 @@ class ThumbnailHelper extends AppHelper {
             ));
             return null;
         }
-        $_thumbnailSrc	    = Set::extract("{$model}.{$field}", $data);
+        $_thumbnailSrc	    = Set::extract(sprintf('%s.%s', $model, $field), $data);
         $_thumbnailName     = str_replace(array('{size}', '{filename}'), array($thumbnailSizeName, $field), $uploadSettings['thumbnailName']);
         $_thumbnailTokens   = explode('.', $_thumbnailSrc);
         $_thumbnailExt      = end($_thumbnailTokens);
